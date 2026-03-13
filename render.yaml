@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: myassistant
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ACCESS_PASSWORD
+        sync: false
