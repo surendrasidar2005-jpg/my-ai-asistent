@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: myassistant
+    name: myassistant-agent
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python app.py

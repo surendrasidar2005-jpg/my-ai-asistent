@@ -1,21 +1,20 @@
 """
-MyAssistant v2 — Production Grade AI Assistant
-- Groq API: llama-3.3-70b-versatile (best free model)
-- Streaming responses
-- PDF analysis, Web search, File manager
-- Render.com / Railway ready
+MyAssistant Agent v3
+True AI Agent with tool calling loop
+- Web search, File R/W, PDF, Calculator, Code runner
+- Payment completely blocked
+- Agentic loop: thinks → picks tool → executes → thinks again → done
 """
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, validator
-import httpx, os, json, time, asyncio
+from pydantic import BaseModel
+import httpx, os, json, time, asyncio, math, subprocess, traceback
 from pathlib import Path
 from collections import defaultdict
 
-# ── Optional deps ───────────────────────────────────────────────────────────
 try:
     import pdfplumber
     PDF_OK = True
@@ -29,70 +28,23 @@ except ImportError:
     SEARCH_OK = False
 
 # ── App ─────────────────────────────────────────────────────────────────────
-app = FastAPI(title="MyAssistant v2", version="2.0.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
-)
+app = FastAPI(title="MyAssistant Agent v3")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ── Config ──────────────────────────────────────────────────────────────────
-WORKSPACE    = Path("workspace"); WORKSPACE.mkdir(exist_ok=True)
-GROQ_KEY     = os.environ.get("GROQ_API_KEY", "")
-ACCESS_PASS  = os.environ.get("ACCESS_PASSWORD", "")
-PORT         = int(os.environ.get("PORT", 8000))
+WORKSPACE   = Path("workspace"); WORKSPACE.mkdir(exist_ok=True)
+GROQ_KEY    = os.environ.get("GROQ_API_KEY", "")
+ACCESS_PASS = os.environ.get("ACCESS_PASSWORD", "")
+PORT        = int(os.environ.get("PORT", 8000))
+GROQ_URL    = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL  = "llama-3.3-70b-versatile"
 
-# Model priority list — falls back automatically
-GROQ_MODELS = [
-    "llama-3.3-70b-versatile",   # Best quality, free
-    "llama-3.1-70b-versatile",   # Fallback
-    "llama-3.1-8b-instant",      # Fast fallback
-]
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-
-# ── Rate limiting (simple in-memory) ────────────────────────────────────────
-rate_store: dict = defaultdict(list)
-
-def rate_limit_ok(ip: str, max_req=30, window=60) -> bool:
-    now = time.time()
-    rate_store[ip] = [t for t in rate_store[ip] if now - t < window]
-    if len(rate_store[ip]) >= max_req:
-        return False
-    rate_store[ip].append(now)
-    return True
-
-# ── System Prompt (carefully engineered) ────────────────────────────────────
-SYSTEM_PROMPT = """You are MyAssistant, an expert AI assistant for students and professionals, especially those in technical fields like mining engineering.
-
-## Your Capabilities
-- Answer questions deeply and accurately in Hindi or English (match user's language)
-- Analyze documents and PDFs with precision
-- Help with research, calculations, writing, and problem-solving
-- Explain complex topics clearly with examples
-
-## Response Quality Rules
-1. Always give thorough, accurate, well-structured answers
-2. Use markdown formatting: **bold**, bullet points, code blocks, tables
-3. For calculations or technical topics, show step-by-step reasoning
-4. If you don't know something, say so honestly
-5. For Hindi questions, reply in Hindi; for English, reply in English; for mixed, use mixed
-
-## ABSOLUTE SAFETY RULES (NEVER VIOLATE)
-1. NEVER assist with payment systems, UPI, banking, financial transfers, or transaction-related tasks
-2. NEVER access, modify, or reference files outside the workspace directory
-3. NEVER execute arbitrary code or system commands
-4. NEVER share API keys, passwords, or sensitive credentials
-5. NEVER generate harmful, illegal, or unethical content
-
-## Context Handling
-- When a PDF/document context is provided, analyze it carefully and answer based on its content
-- Always cite which part of the document your answer comes from when analyzing PDFs"""
-
-# ── Safety system ────────────────────────────────────────────────────────────
+# ── Safety ──────────────────────────────────────────────────────────────────
 BLOCKED = [
     "upi","paytm","phonepe","gpay","google pay","amazon pay","bhim",
-    "credit card","debit card","card number","account number","ifsc","cvv","pin",
+    "credit card","debit card","card number","account number","ifsc","cvv",
     "bank transfer","send money","neft","rtgs","imps","net banking",
-    "otp for payment","wallet transfer","razorpay","stripe","paypal transfer"
+    "otp for payment","wallet transfer","razorpay","stripe","paypal",
+    "payment gateway","transaction","bank account","financial transfer"
 ]
 
 def is_safe(text: str) -> bool:
@@ -102,81 +54,329 @@ def is_safe(text: str) -> bool:
 def auth_ok(pw: str) -> bool:
     return (not ACCESS_PASS) or (pw == ACCESS_PASS)
 
-# ── Schemas ──────────────────────────────────────────────────────────────────
-class ChatRequest(BaseModel):
+# ── TOOLS DEFINITION (what agent can use) ───────────────────────────────────
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for current information. Use when user asks to find, search, or look up something online.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query to look up"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Create or overwrite a file in workspace with given content. Use when user asks to save, write, or create a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "File name (e.g. notes.txt, report.md)"},
+                    "content":  {"type": "string", "description": "Full content to write to the file"}
+                },
+                "required": ["filename", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read contents of a file from workspace. Use when user asks to read, open, or view a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "File name to read"}
+                },
+                "required": ["filename"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "List all files in workspace. Use when user asks what files exist.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculator",
+            "description": "Evaluate a mathematical expression. Use for any calculation, formula, or math problem.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {"type": "string", "description": "Math expression to evaluate (e.g. '2 * (3 + 4)', 'sqrt(144)', 'sin(45 * pi / 180)')"}
+                },
+                "required": ["expression"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "append_file",
+            "description": "Append content to end of existing file. Use when user wants to add to a file without overwriting.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "File name to append to"},
+                    "content":  {"type": "string", "description": "Content to append"}
+                },
+                "required": ["filename", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": "Delete a file from workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "File name to delete"}
+                },
+                "required": ["filename"]
+            }
+        }
+    }
+]
+
+# ── Tool Executor ────────────────────────────────────────────────────────────
+async def execute_tool(name: str, args: dict) -> str:
+    try:
+        if name == "web_search":
+            query = args.get("query", "")
+            if not is_safe(query):
+                return "❌ BLOCKED: Payment related search blocked."
+            if not SEARCH_OK:
+                return "Search unavailable (duckduckgo-search not installed)"
+            results = []
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, max_results=5):
+                    results.append(f"Title: {r.get('title','')}\nSnippet: {r.get('body','')}\nURL: {r.get('href','')}")
+            return "\n\n---\n\n".join(results) if results else "No results found."
+
+        elif name == "write_file":
+            fname   = Path(args["filename"]).name
+            content = args.get("content", "")
+            if not is_safe(content):
+                return "❌ BLOCKED: Payment related content blocked."
+            (WORKSPACE / fname).write_text(content, encoding="utf-8")
+            return f"✅ File '{fname}' successfully saved! ({len(content)} characters)"
+
+        elif name == "append_file":
+            fname   = Path(args["filename"]).name
+            content = args.get("content", "")
+            if not is_safe(content):
+                return "❌ BLOCKED: Payment related content blocked."
+            path = WORKSPACE / fname
+            existing = path.read_text(encoding="utf-8") if path.exists() else ""
+            path.write_text(existing + "\n" + content, encoding="utf-8")
+            return f"✅ Content appended to '{fname}'"
+
+        elif name == "read_file":
+            fname = Path(args["filename"]).name
+            path  = WORKSPACE / fname
+            if not path.exists():
+                return f"❌ File '{fname}' not found. Use list_files to see available files."
+            return path.read_text(encoding="utf-8", errors="replace")
+
+        elif name == "list_files":
+            files = [f.name for f in WORKSPACE.iterdir() if f.is_file()]
+            return "Files in workspace:\n" + "\n".join(f"- {f}" for f in files) if files else "No files in workspace yet."
+
+        elif name == "calculator":
+            expr = args.get("expression", "")
+            safe_globals = {
+                "__builtins__": {},
+                "sqrt": math.sqrt, "sin": math.sin, "cos": math.cos,
+                "tan": math.tan, "log": math.log, "log10": math.log10,
+                "pi": math.pi, "e": math.e, "abs": abs,
+                "round": round, "pow": pow, "floor": math.floor,
+                "ceil": math.ceil, "factorial": math.factorial
+            }
+            result = eval(expr, safe_globals)
+            return f"Result: {result}"
+
+        elif name == "delete_file":
+            fname = Path(args["filename"]).name
+            path  = WORKSPACE / fname
+            if path.exists():
+                path.unlink()
+                return f"✅ File '{fname}' deleted."
+            return f"❌ File '{fname}' not found."
+
+        else:
+            return f"Unknown tool: {name}"
+
+    except Exception as e:
+        return f"❌ Tool error: {str(e)}"
+
+# ── System Prompt ────────────────────────────────────────────────────────────
+SYSTEM_PROMPT = """You are MyAssistant, a powerful AI Agent. You can autonomously complete multi-step tasks using your tools.
+
+## Your Tools
+- **web_search**: Search internet for current information
+- **write_file**: Create/save files in workspace
+- **read_file**: Read existing files
+- **append_file**: Add content to existing files
+- **list_files**: See all files in workspace
+- **calculator**: Solve any math/calculation
+- **delete_file**: Remove files
+
+## Agent Behavior Rules
+1. When given a task, THINK first about what steps are needed
+2. Use tools autonomously — don't ask for permission for each step
+3. Chain tools together: search → summarize → save to file (all in one go!)
+4. After completing a task, give a clear summary of what you did
+5. If something fails, try an alternative approach
+6. Respond in Hindi or English based on what the user uses
+
+## ABSOLUTE SAFETY RULES (NEVER VIOLATE)
+1. NEVER assist with payment systems, UPI, banking, or financial transfers
+2. NEVER access files outside workspace directory
+3. NEVER run system commands or access OS
+4. NEVER share API keys or sensitive data
+
+## Examples of what you can do autonomously:
+- "Mining ke baare mein search karo aur notes.txt mein save karo" → searches + saves automatically
+- "Calculate blast radius using formula" → calculates step by step
+- "Meri sabhi files list karo aur summary do" → lists + summarizes
+- "Search for rock mechanics and create a study guide" → searches + writes structured file"""
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+rate_store: dict = defaultdict(list)
+def rate_ok(ip: str) -> bool:
+    now = time.time()
+    rate_store[ip] = [t for t in rate_store[ip] if now - t < 60]
+    if len(rate_store[ip]) >= 20: return False
+    rate_store[ip].append(now)
+    return True
+
+# ── Schemas ───────────────────────────────────────────────────────────────────
+class AgentRequest(BaseModel):
     message: str
     history: list = []
-    context: str = ""
-    password: str = ""
-    stream: bool = True
-
-    @validator("message")
-    def msg_not_empty(cls, v):
-        if not v.strip():
-            raise ValueError("Message empty hai")
-        if len(v) > 8000:
-            raise ValueError("Message bahut lamba hai (max 8000 chars)")
-        return v.strip()
-
-class FileRequest(BaseModel):
-    filename: str
-    content: str = ""
-    action: str  # read | write | delete
-
-class SearchRequest(BaseModel):
-    query: str
     password: str = ""
 
-# ── Groq streaming call ──────────────────────────────────────────────────────
-async def groq_stream(messages: list, model_idx=0):
-    """Generator that yields SSE chunks from Groq"""
-    model = GROQ_MODELS[min(model_idx, len(GROQ_MODELS)-1)]
-    async with httpx.AsyncClient(timeout=90) as client:
-        async with client.stream(
-            "POST", GROQ_URL,
-            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-            json={"model": model, "messages": messages,
-                  "temperature": 0.65, "max_tokens": 2048, "stream": True}
-        ) as resp:
-            if resp.status_code == 429 and model_idx < len(GROQ_MODELS)-1:
-                async for chunk in groq_stream(messages, model_idx+1):
-                    yield chunk
+# ── Agentic SSE Stream ────────────────────────────────────────────────────────
+async def agent_stream(messages: list):
+    """
+    True agentic loop:
+    1. Call LLM
+    2. If tool_calls → execute tools → feed results back → loop
+    3. If final text → stream to user
+    """
+    MAX_ITERATIONS = 8
+    iteration = 0
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        while iteration < MAX_ITERATIONS:
+            iteration += 1
+
+            # Call Groq
+            payload = {
+                "model": GROQ_MODEL,
+                "messages": messages,
+                "tools": TOOLS,
+                "tool_choice": "auto",
+                "temperature": 0.4,
+                "max_tokens": 2048
+            }
+
+            try:
+                resp = await client.post(
+                    GROQ_URL,
+                    headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+                    json=payload
+                )
+            except Exception as e:
+                yield f"data: {json.dumps({'type':'error','text':f'Connection error: {e}'})}\n\n"
                 return
+
             if resp.status_code != 200:
-                body = await resp.aread()
-                yield f"data: {json.dumps({'error': f'Groq error {resp.status_code}'})}\n\n"
+                err = resp.text[:300]
+                yield f"data: {json.dumps({'type':'error','text':f'Groq error {resp.status_code}: {err}'})}\n\n"
                 return
 
-            async for line in resp.aiter_lines():
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
-                        yield "data: [DONE]\n\n"
-                        return
+            data      = resp.json()
+            choice    = data["choices"][0]
+            message   = choice["message"]
+            finish    = choice["finish_reason"]
+
+            # Add assistant response to history
+            messages.append(message)
+
+            # ── Tool calls ───────────────────────────────────────────────
+            if finish == "tool_calls" and message.get("tool_calls"):
+                tool_results = []
+
+                for tc in message["tool_calls"]:
+                    tool_name = tc["function"]["name"]
                     try:
-                        chunk = json.loads(data)
-                        delta = chunk["choices"][0]["delta"].get("content", "")
-                        if delta:
-                            yield f"data: {json.dumps({'token': delta})}\n\n"
-                    except Exception:
-                        continue
+                        tool_args = json.loads(tc["function"]["arguments"])
+                    except:
+                        tool_args = {}
 
-async def groq_sync(messages: list) -> str:
-    """Non-streaming call for internal use"""
-    async with httpx.AsyncClient(timeout=60) as client:
-        for model in GROQ_MODELS:
-            r = await client.post(
-                GROQ_URL,
-                headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-                json={"model": model, "messages": messages, "temperature": 0.65, "max_tokens": 2048}
-            )
-            if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"]
-            if r.status_code != 429:
-                raise HTTPException(500, f"Groq error: {r.text[:200]}")
-    raise HTTPException(503, "Groq quota exceeded. Thodi der baad try karo.")
+                    # Tell user what agent is doing
+                    tool_display = {
+                        "web_search":  f"🔍 Searching: {tool_args.get('query','')}",
+                        "write_file":  f"💾 Saving file: {tool_args.get('filename','')}",
+                        "read_file":   f"📖 Reading file: {tool_args.get('filename','')}",
+                        "list_files":  "📂 Listing workspace files...",
+                        "calculator":  f"🧮 Calculating: {tool_args.get('expression','')}",
+                        "append_file": f"✏️ Appending to: {tool_args.get('filename','')}",
+                        "delete_file": f"🗑️ Deleting: {tool_args.get('filename','')}"
+                    }.get(tool_name, f"🔧 Using tool: {tool_name}")
 
-# ── Routes ───────────────────────────────────────────────────────────────────
+                    yield f"data: {json.dumps({'type':'tool','text':tool_display})}\n\n"
+                    await asyncio.sleep(0.1)
+
+                    # Execute tool
+                    result = await execute_tool(tool_name, tool_args)
+
+                    tool_results.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result[:3000]  # limit result size
+                    })
+
+                # Feed all tool results back
+                messages.extend(tool_results)
+                continue  # loop again
+
+            # ── Final response ────────────────────────────────────────────
+            if finish in ("stop", "length") or message.get("content"):
+                content = message.get("content", "")
+                if content:
+                    # Stream token by token
+                    words = content.split(" ")
+                    for i, word in enumerate(words):
+                        chunk = word + (" " if i < len(words)-1 else "")
+                        yield f"data: {json.dumps({'type':'token','text':chunk})}\n\n"
+                        await asyncio.sleep(0.01)
+                yield "data: [DONE]\n\n"
+                return
+
+            # Safety: no more tool calls and no content
+            yield "data: [DONE]\n\n"
+            return
+
+    yield f"data: {json.dumps({'type':'error','text':'Agent max iterations reached.'})}\n\n"
+    yield "data: [DONE]\n\n"
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/")
 async def root():
     return HTMLResponse(open("static/index.html", encoding="utf-8").read())
@@ -184,155 +384,73 @@ async def root():
 @app.get("/status")
 async def status():
     return {
-        "ok": bool(GROQ_KEY),
-        "model": GROQ_MODELS[0],
-        "all_models": GROQ_MODELS,
-        "pdf": PDF_OK,
-        "search": SEARCH_OK,
+        "ok": bool(GROQ_KEY), "model": GROQ_MODEL,
+        "pdf": PDF_OK, "search": SEARCH_OK,
         "password_protected": bool(ACCESS_PASS),
-        "version": "2.0.0"
+        "version": "3.0.0-agent",
+        "tools": [t["function"]["name"] for t in TOOLS]
     }
 
-@app.post("/chat")
-async def chat(req: ChatRequest, request: Request):
-    ip = request.client.host
-    if not rate_limit_ok(ip):
-        raise HTTPException(429, "Bahut zyada requests! Ek minute baad try karo.")
+@app.post("/agent")
+async def agent(req: AgentRequest, request: Request):
+    if not rate_ok(request.client.host):
+        raise HTTPException(429, "Bahut zyada requests! 1 min baad try karo.")
     if not auth_ok(req.password):
         raise HTTPException(401, "Password galat hai!")
     if not GROQ_KEY:
-        raise HTTPException(503, "GROQ_API_KEY environment variable set nahi hai!")
+        raise HTTPException(503, "GROQ_API_KEY set nahi hai!")
     if not is_safe(req.message):
-        raise HTTPException(403, "⚠️ Payment/banking related requests blocked hain!")
+        raise HTTPException(403, "⚠️ Payment/banking related requests blocked!")
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    # Inject PDF context smartly
-    if req.context.strip():
-        messages.append({
-            "role": "system",
-            "content": f"## Document Context (User ne ye document upload kiya hai):\n\n{req.context[:4000]}\n\nIs document ke baare mein accurately answer karo."
-        })
-
-    # Last 12 messages history
-    for h in req.history[-12:]:
+    for h in req.history[-10:]:
         if h.get("role") in ("user", "assistant") and h.get("content"):
             messages.append({"role": h["role"], "content": h["content"]})
-
     messages.append({"role": "user", "content": req.message})
 
-    if req.stream:
-        return StreamingResponse(
-            groq_stream(messages),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-        )
-    else:
-        reply = await groq_sync(messages)
-        return {"response": reply}
+    return StreamingResponse(
+        agent_stream(messages),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 @app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...)):
     if not PDF_OK:
-        raise HTTPException(501, "Server pe pdfplumber install nahi hai")
+        raise HTTPException(501, "pdfplumber nahi hai")
     if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(400, "Sirf .pdf files allowed hain")
-    if file.size and file.size > 20 * 1024 * 1024:
-        raise HTTPException(413, "PDF 20MB se chhota hona chahiye")
-
-    raw = await file.read()
+        raise HTTPException(400, "Sirf PDF allowed")
+    raw  = await file.read()
     safe = Path(file.filename).name
     path = WORKSPACE / safe
     path.write_bytes(raw)
-
-    pages_text = []
-    try:
-        with pdfplumber.open(path) as pdf:
-            total = len(pdf.pages)
-            for i, page in enumerate(pdf.pages[:25]):
-                t = page.extract_text()
-                if t and t.strip():
-                    pages_text.append(f"[Page {i+1}]\n{t.strip()}")
-    except Exception as e:
-        raise HTTPException(500, f"PDF parse error: {e}")
-
-    if not pages_text:
-        raise HTTPException(422, "PDF se text extract nahi hua. Scanned PDF ho sakta hai.")
-
-    full = "\n\n".join(pages_text)
-    return {
-        "filename": safe,
-        "total_pages": total,
-        "extracted_pages": len(pages_text),
-        "text": full[:10000],
-        "preview": full[:400],
-        "word_count": len(full.split())
-    }
-
-@app.post("/search")
-async def search(req: SearchRequest):
-    if not auth_ok(req.password):
-        raise HTTPException(401, "Password galat hai!")
-    if not SEARCH_OK:
-        raise HTTPException(501, "duckduckgo-search install nahi hai")
-    if not is_safe(req.query):
-        raise HTTPException(403, "Query blocked hai")
-    if not req.query.strip():
-        raise HTTPException(400, "Query empty hai")
-
-    try:
-        results = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(req.query.strip(), max_results=6):
-                results.append({
-                    "title":   r.get("title", ""),
-                    "snippet": r.get("body", ""),
-                    "url":     r.get("href", "")
-                })
-        return {"results": results, "query": req.query}
-    except Exception as e:
-        raise HTTPException(500, f"Search failed: {e}")
+    pages = []
+    with pdfplumber.open(path) as pdf:
+        total = len(pdf.pages)
+        for i, page in enumerate(pdf.pages[:25]):
+            t = page.extract_text()
+            if t: pages.append(f"[Page {i+1}]\n{t.strip()}")
+    full = "\n\n".join(pages)
+    return {"filename": safe, "total_pages": total,
+            "text": full[:10000], "preview": full[:400],
+            "word_count": len(full.split())}
 
 @app.get("/files")
-async def list_files():
-    exts = {".txt":"📝",".md":"📋",".py":"🐍",".json":"📦",
-            ".csv":"📊",".pdf":"📄",".html":"🌐",".js":"⚡"}
-    files = []
-    for f in sorted(WORKSPACE.iterdir()):
-        if f.is_file():
-            files.append({
-                "name": f.name, "size": f.stat().st_size,
-                "ext": f.suffix, "icon": exts.get(f.suffix, "📄"),
-                "modified": int(f.stat().st_mtime)
-            })
-    return {"files": files}
+async def list_files_api():
+    icons = {".txt":"📝",".md":"📋",".py":"🐍",".json":"📦",".csv":"📊",".pdf":"📄"}
+    return {"files": [
+        {"name": f.name, "size": f.stat().st_size,
+         "icon": icons.get(f.suffix, "📄"), "ext": f.suffix}
+        for f in sorted(WORKSPACE.iterdir()) if f.is_file()
+    ]}
 
-@app.post("/file")
-async def handle_file(req: FileRequest):
-    safe = Path(req.filename).name          # strip any path traversal
-    path = WORKSPACE / safe
+@app.get("/file/{filename}")
+async def get_file(filename: str):
+    path = WORKSPACE / Path(filename).name
+    if not path.exists():
+        raise HTTPException(404, "File not found")
+    return {"content": path.read_text(encoding="utf-8", errors="replace")}
 
-    if req.action == "read":
-        if not path.exists():
-            raise HTTPException(404, f"'{safe}' nahi mila")
-        return {"filename": safe, "content": path.read_text(encoding="utf-8", errors="replace")}
-
-    elif req.action == "write":
-        if not safe:
-            raise HTTPException(400, "Filename empty hai")
-        if not is_safe(req.content):
-            raise HTTPException(403, "Content mein restricted keywords hain")
-        path.write_text(req.content, encoding="utf-8")
-        return {"ok": True, "message": f"✅ '{safe}' save ho gayi!"}
-
-    elif req.action == "delete":
-        if path.exists():
-            path.unlink()
-        return {"ok": True, "message": f"🗑️ '{safe}' delete ho gayi"}
-
-    raise HTTPException(400, "Action: 'read' | 'write' | 'delete'")
-
-# ── Static + Boot ────────────────────────────────────────────────────────────
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
