@@ -29,7 +29,18 @@ except ImportError:
 
 # ── App ─────────────────────────────────────────────────────────────────────
 app = FastAPI(title="MyAssistant Agent v3")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# ── Fix 4: CORS Restriction ──────────────────────────────────────────────────
+ALLOWED_ORIGINS = [
+    "https://my-ai-asistent.onrender.com",
+    "http://localhost:8000"
+]
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=ALLOWED_ORIGINS, 
+    allow_methods=["POST", "GET"], 
+    allow_headers=["*"]
+)
 
 WORKSPACE   = Path("workspace"); WORKSPACE.mkdir(exist_ok=True)
 GROQ_KEY    = os.environ.get("GROQ_API_KEY", "")
@@ -53,6 +64,42 @@ def is_safe(text: str) -> bool:
 
 def auth_ok(pw: str) -> bool:
     return (not ACCESS_PASS) or (pw == ACCESS_PASS)
+
+# ── Fix 1: Memory Helpers ────────────────────────────────────────────────────
+MEMORY_FILE = WORKSPACE / "memory.json"
+
+def load_memory() -> list:
+    if not MEMORY_FILE.exists():
+        return []
+    try:
+        return json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
+    except:
+        return []
+
+def save_memory(facts: list):
+    old = load_memory()
+    new = old + facts
+    # Keep max 20 entries, delete oldest
+    new = new[-20:]
+    MEMORY_FILE.write_text(json.dumps(new, indent=2, ensure_ascii=False), encoding="utf-8")
+
+async def extract_facts(user_msg: str, ai_msg: str):
+    """Hidden LLM call to extract key facts for memory"""
+    if not GROQ_KEY: return
+    prompt = f"Extract 1-2 important facts (names, preferences, results) from this chat. User: {user_msg}. AI: {ai_msg}. Return as JSON array of strings: [\"fact1\", \"fact2\"]. If no new facts, return []"
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(GROQ_URL, headers={"Authorization": f"Bearer {GROQ_KEY}"}, json={
+                "model": "llama-3.1-8b-instant",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"}
+            })
+            data = resp.json()
+            facts = json.loads(data["choices"][0]["message"]["content"]).get("facts", [])
+            if facts: save_memory(facts)
+        except:
+            pass
 
 # ── TOOLS DEFINITION (what agent can use) ───────────────────────────────────
 TOOLS = [
@@ -343,8 +390,11 @@ async def agent_stream(messages: list):
                     yield f"data: {json.dumps({'type':'tool','text':tool_display})}\n\n"
                     await asyncio.sleep(0.1)
 
-                    # Execute tool
-                    result = await execute_tool(tool_name, tool_args)
+                    # Fix 3: Tool Timeout
+                    try:
+                        result = await asyncio.wait_for(execute_tool(tool_name, tool_args), timeout=10.0)
+                    except asyncio.TimeoutError:
+                        result = "❌ Tool timed out after 10 seconds, trying next step."
 
                     tool_results.append({
                         "role": "tool",
@@ -360,6 +410,10 @@ async def agent_stream(messages: list):
             if finish in ("stop", "length") or message.get("content"):
                 content = message.get("content", "")
                 if content:
+                    # Fix 1: Trigger background memory extraction
+                    user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+                    asyncio.create_task(extract_facts(user_msg, content))
+
                     # Stream token by token
                     words = content.split(" ")
                     for i, word in enumerate(words):
@@ -379,7 +433,12 @@ async def agent_stream(messages: list):
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/")
 async def root():
-    return HTMLResponse(open("static/index.html", encoding="utf-8").read())
+    return HTMLResponse(open("index.html", encoding="utf-8").read())
+
+# ── Fix 2: Health Check ──────────────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    return {"status": "ok", "timestamp": time.time(), "msg": "Server is warm and ready"}
 
 @app.get("/status")
 async def status():
@@ -402,7 +461,12 @@ async def agent(req: AgentRequest, request: Request):
     if not is_safe(req.message):
         raise HTTPException(403, "⚠️ Payment/banking related requests blocked!")
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Fix 1: Inject Memory Context
+    memory = load_memory()
+    mem_ctx = "\nPrevious context: " + " | ".join(memory) if memory else ""
+    full_prompt = SYSTEM_PROMPT + mem_ctx
+
+    messages = [{"role": "system", "content": full_prompt}]
     for h in req.history[-10:]:
         if h.get("role") in ("user", "assistant") and h.get("content"):
             messages.append({"role": h["role"], "content": h["content"]})
@@ -429,11 +493,26 @@ async def upload_pdf(file: UploadFile = File(...)):
         total = len(pdf.pages)
         for i, page in enumerate(pdf.pages[:25]):
             t = page.extract_text()
-            if t: pages.append(f"[Page {i+1}]\n{t.strip()}")
-    full = "\n\n".join(pages)
-    return {"filename": safe, "total_pages": total,
-            "text": full[:10000], "preview": full[:400],
-            "word_count": len(full.split())}
+            if t: pages.append(t.strip())
+    
+    full_text = "\n\n".join(pages)
+    
+    # Fix 5: PDF Chunking (Max 2000 chars per chunk, max 5 chunks)
+    CHUNK_SIZE = 2000
+    all_chunks = [full_text[i:i + CHUNK_SIZE] for i in range(0, len(full_text), CHUNK_SIZE)]
+    chunks = all_chunks[:5]
+    processed_text = "\n\n--- Next Chunk ---\n\n".join(chunks)
+    
+    note = f" (Showing analysis of first {len(chunks)} chunks/pages)"
+    
+    return {
+        "filename": safe, 
+        "total_pages": total,
+        "text": processed_text + note, 
+        "preview": processed_text[:400],
+        "word_count": len(processed_text.split()),
+        "note": note
+    }
 
 @app.get("/files")
 async def list_files_api():
@@ -455,4 +534,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
     import uvicorn
+    # Fix 2: Warm startup message
+    print("Server is warm and ready")
     uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=False)
