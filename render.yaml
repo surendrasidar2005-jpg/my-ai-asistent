@@ -2,10 +2,16 @@ services:
   - type: web
     name: myassistant-agent
     runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
       - key: GROQ_API_KEY
         sync: false
       - key: ACCESS_PASSWORD
         sync: false
+      - key: PORT
+        value: 8000
+    healthCheckPath: /status
