@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>MyAssistant Agent v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<style>
+:root{
+  --bg:#07090b;--surface:#0d1117;--surface2:#161c24;--border:#1c2530;--border2:#243040;
+  --gold:#f0a500;--gold2:#c8891a;--glow:rgba(240,165,0,0.1);
+  --text:#dde6f0;--text2:#8a9bb0;--text3:#4a5a6a;
+  --blue:#4a9eff;--green:#3dba6f;--red:#e05555;--purple:#a78bfa;
+  --user-bg:#0d1f35;--r:12px;--rs:8px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Outfit',sans-serif;overflow:hidden;-webkit-font-smoothing:antialiased}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(ellipse 60% 40% at 50% 0%,rgba(240,165,0,0.04),transparent);}
+
+.shell{display:flex;height:100vh;position:relative;z-index:1}
+
+/* Sidebar */
+.sidebar{width:230px;min-width:230px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;}
+.brand{padding:20px;border-bottom:1px solid var(--border);}
+.brand-name{font-size:1.1rem;font-weight:800;letter-spacing:-0.5px;
+  background:linear-gradient(135deg,var(--gold),#f5d47a);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.brand-ver{font-size:.65rem;color:var(--text3);font-family:'Fira Code',monospace;letter-spacing:1px;margin-top:2px}
+.status-row{display:flex;align-items:center;gap:7px;margin-top:10px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--text3);transition:all .4s;flex-shrink:0}
+.dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+.dot.err{background:var(--red)}
+.stxt{font-size:.7rem;color:var(--text2);font-family:'Fira Code',monospace}
+
+/* Tools panel */
+.tools-section{padding:14px 12px;border-bottom:1px solid var(--border);}
+.tools-title{font-size:.65rem;color:var(--text3);font-family:'Fira Code',monospace;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px;}
+.tool-chip{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:var(--rs);margin-bottom:4px;font-size:.78rem;color:var(--text2);}
+.tool-chip .ti{font-size:.9rem;width:18px;text-align:center;}
+.tool-chip.active{background:var(--glow);color:var(--gold);animation:pulse-tool .5s ease;}
+@keyframes pulse-tool{0%{transform:scale(1)}50%{transform:scale(1.02)}100%{transform:scale(1)}}
+
+nav{padding:10px 10px;flex:1;}
+.nav-item{display:flex;align-items:center;gap:9px;padding:9px 12px;border-radius:var(--rs);border:none;background:transparent;color:var(--text2);cursor:pointer;width:100%;text-align:left;font-family:'Outfit',sans-serif;font-size:.83rem;font-weight:500;transition:all .15s;}
+.nav-item:hover{background:var(--surface2);color:var(--text)}
+.nav-item.active{background:var(--glow);color:var(--gold)}
+
+.sidebar-foot{padding:14px 16px;border-top:1px solid var(--border);font-size:.65rem;color:var(--text3);font-family:'Fira Code',monospace;line-height:1.8}
+.shield{display:inline-flex;align-items:center;gap:4px;background:rgba(61,186,111,.08);color:var(--green);border:1px solid rgba(61,186,111,.2);border-radius:4px;padding:3px 8px;font-size:.62rem;margin-top:7px;}
+
+/* Main */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.topbar{padding:13px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface);flex-shrink:0;}
+.topbar-l{display:flex;align-items:center;gap:10px}
+.topbar h2{font-size:.92rem;font-weight:700}
+.model-chip{font-family:'Fira Code',monospace;font-size:.62rem;color:var(--gold);background:var(--glow);border:1px solid rgba(240,165,0,.2);border-radius:4px;padding:3px 9px;}
+.agent-badge{font-size:.62rem;color:var(--purple);background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.2);border-radius:4px;padding:3px 9px;font-family:'Fira Code',monospace;}
+
+/* Panels */
+.panel{display:none;flex:1;flex-direction:column;overflow:hidden}
+.panel.active{display:flex}
+
+/* Chat */
+.msgs{flex:1;overflow-y:auto;padding:20px 22px;display:flex;flex-direction:column;gap:16px;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+.msgs::-webkit-scrollbar{width:4px}
+.msgs::-webkit-scrollbar-thumb{background:var(--border2);border-radius:10px}
+
+/* Welcome */
+.welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:40px;text-align:center;}
+.w-icon{font-size:3rem;filter:drop-shadow(0 0 20px rgba(240,165,0,.5));margin-bottom:4px}
+.welcome h2{font-size:1.4rem;font-weight:800;background:linear-gradient(135deg,var(--gold),#f5d47a);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.welcome p{font-size:.83rem;color:var(--text2);max-width:380px;line-height:1.75}
+.examples{display:flex;flex-direction:column;gap:8px;margin-top:12px;width:100%;max-width:480px;}
+.ex-chip{padding:11px 16px;border-radius:var(--rs);border:1px solid var(--border2);background:var(--surface2);color:var(--text2);font-size:.8rem;cursor:pointer;transition:all .2s;text-align:left;line-height:1.5;}
+.ex-chip:hover{border-color:var(--gold);color:var(--gold);background:var(--glow)}
+.ex-chip strong{color:var(--text);font-weight:600;display:block;font-size:.75rem;margin-bottom:2px;}
+
+/* Messages */
+.msg{display:flex;gap:11px;animation:fadeUp .22s ease;max-width:100%}
+.msg.user{flex-direction:row-reverse;align-self:flex-end;max-width:82%}
+.msg.ai{align-self:flex-start;max-width:90%}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+.avatar{width:32px;height:32px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:700;}
+.msg.user .avatar{background:rgba(74,158,255,.15);color:var(--blue)}
+.msg.ai   .avatar{background:var(--glow);color:var(--gold)}
+
+.msg-body{flex:1;min-width:0}
+.bubble{padding:12px 15px;border-radius:var(--r);border:1px solid var(--border);font-size:.862rem;line-height:1.65;word-break:break-word;}
+.msg.user .bubble{background:var(--user-bg);border-color:#1a3050}
+.msg.ai   .bubble{background:var(--surface2)}
+
+/* Tool steps shown inline */
+.tool-step{display:flex;align-items:center;gap:8px;padding:6px 12px;background:rgba(167,139,250,.06);border:1px solid rgba(167,139,250,.15);border-radius:var(--rs);font-size:.75rem;color:var(--purple);margin-bottom:6px;font-family:'Fira Code',monospace;animation:fadeUp .2s ease;}
+.tool-step .ts-icon{flex-shrink:0}
+
+/* Markdown */
+.bubble h1,.bubble h2,.bubble h3{color:var(--gold);font-weight:700;margin:.8em 0 .4em}
+.bubble h1{font-size:1.05rem}.bubble h2{font-size:.96rem}.bubble h3{font-size:.88rem}
+.bubble p{margin:.35em 0}
+.bubble ul,.bubble ol{padding-left:1.4em;margin:.4em 0}
+.bubble li{margin:.2em 0}
+.bubble strong{color:#f0d080;font-weight:600}
+.bubble table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:.8rem}
+.bubble th{background:var(--surface);color:var(--gold);padding:7px 12px;border:1px solid var(--border2);text-align:left}
+.bubble td{padding:6px 12px;border:1px solid var(--border)}
+.bubble blockquote{border-left:3px solid var(--gold);padding:.4em .8em;color:var(--text2);margin:.4em 0}
+.code-wrap{position:relative;margin:.5em 0;border-radius:var(--rs);overflow:hidden;border:1px solid var(--border2)}
+.code-hdr{display:flex;align-items:center;justify-content:space-between;background:#0d1117;padding:6px 12px;font-family:'Fira Code',monospace;font-size:.68rem;color:var(--text3);}
+.copy-btn{background:none;border:1px solid var(--border2);border-radius:4px;color:var(--text2);padding:2px 7px;cursor:pointer;font-size:.65rem;font-family:'Outfit',monospace;transition:all .2s;}
+.copy-btn:hover{border-color:var(--gold);color:var(--gold)}
+.code-wrap pre{margin:0!important;border-radius:0!important;border:none!important}
+.code-wrap code{font-family:'Fira Code',monospace!important;font-size:.78rem!important}
+.bubble code:not(pre code){font-family:'Fira Code',monospace;font-size:.78rem;background:#0d1117;border:1px solid var(--border2);padding:1px 5px;border-radius:4px;color:#a3e635;}
+
+/* Typing */
+.typing-dots{display:flex;gap:5px;padding:5px 0}
+.typing-dots span{width:7px;height:7px;border-radius:50%;background:var(--gold);opacity:.4;animation:pulse 1.4s infinite;}
+.typing-dots span:nth-child(2){animation-delay:.2s}
+.typing-dots span:nth-child(3){animation-delay:.4s}
+@keyframes pulse{0%,80%,100%{transform:scale(.7);opacity:.3}40%{transform:scale(1);opacity:1}}
+
+/* Input */
+.input-wrap{padding:14px 22px;border-top:1px solid var(--border);background:var(--surface);flex-shrink:0;}
+.input-row{display:flex;gap:10px;align-items:flex-end}
+.chat-ta{flex:1;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--r);padding:12px 16px;color:var(--text);font-family:'Outfit',sans-serif;font-size:.875rem;resize:none;height:48px;max-height:140px;outline:none;transition:border-color .2s;line-height:1.5;}
+.chat-ta:focus{border-color:rgba(240,165,0,.4)}
+.chat-ta::placeholder{color:var(--text3)}
+.send-btn{background:var(--gold);color:#000;border:none;border-radius:var(--r);width:48px;height:48px;cursor:pointer;font-size:1.2rem;font-weight:700;flex-shrink:0;transition:all .15s;display:flex;align-items:center;justify-content:center;}
+.send-btn:hover:not(:disabled){background:var(--gold2);transform:scale(1.04)}
+.send-btn:disabled{opacity:.35;cursor:not-allowed;transform:none}
+.input-hint{font-size:.68rem;color:var(--text3);margin-top:7px;font-family:'Fira Code',monospace;}
+
+/* PDF Panel */
+.pdf-wrap,.files-wrap{padding:22px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:16px}
+.drop-zone{border:2px dashed var(--border2);border-radius:14px;padding:48px 24px;text-align:center;cursor:pointer;transition:all .25s;position:relative;background:var(--surface2);}
+.drop-zone:hover,.drop-zone.drag{border-color:var(--gold);background:var(--glow)}
+.drop-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.dz-ico{font-size:2.8rem;margin-bottom:12px}
+.pdf-card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:18px;display:none;}
+.pdf-card.on{display:block}
+.badge{font-family:'Fira Code',monospace;font-size:.65rem;padding:3px 8px;border-radius:4px;}
+.badge.pdf{background:rgba(240,165,0,.1);color:var(--gold);border:1px solid rgba(240,165,0,.2)}
+.badge.pages{background:rgba(74,158,255,.08);color:var(--blue);border:1px solid rgba(74,158,255,.2)}
+.pdf-preview{background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);padding:12px;font-size:.75rem;color:var(--text2);line-height:1.7;max-height:150px;overflow-y:auto;font-family:'Fira Code',monospace;white-space:pre-wrap;}
+.file-row{display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--rs);padding:11px 16px;transition:border-color .2s;}
+.file-row:hover{border-color:var(--border2)}
+.f-name{flex:1;font-size:.85rem;font-weight:600}
+.f-size{font-size:.68rem;color:var(--text3);font-family:'Fira Code',monospace}
+.field{background:var(--surface2);border:1px solid var(--border2);border-radius:var(--rs);padding:10px 14px;color:var(--text);font-family:'Outfit',sans-serif;font-size:.85rem;outline:none;transition:border-color .2s;width:100%;}
+.field:focus{border-color:rgba(240,165,0,.4)}
+
+/* Buttons */
+.btn{padding:9px 18px;border-radius:var(--rs);border:none;cursor:pointer;font-family:'Outfit',sans-serif;font-size:.8rem;font-weight:600;transition:all .15s;}
+.btn-gold{background:var(--gold);color:#000}.btn-gold:hover{background:var(--gold2)}
+.btn-ghost{background:transparent;color:var(--text2);border:1px solid var(--border2)}.btn-ghost:hover{color:var(--text)}
+.btn-red{background:rgba(224,85,85,.1);color:var(--red);border:1px solid rgba(224,85,85,.2)}.btn-red:hover{background:rgba(224,85,85,.2)}
+.btn-sm{padding:5px 11px;font-size:.72rem}
+.btn-grp{display:flex;gap:8px;flex-wrap:wrap}
+
+/* Toast */
+.toast{position:fixed;bottom:22px;right:22px;z-index:9999;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--r);padding:12px 18px;font-size:.8rem;max-width:300px;transform:translateY(60px);opacity:0;transition:all .3s;pointer-events:none;}
+.toast.show{transform:translateY(0);opacity:1}
+.toast.ok{border-color:rgba(61,186,111,.3);color:var(--green)}
+.toast.err{border-color:rgba(224,85,85,.3);color:var(--red)}
+.toast.warn{border-color:rgba(240,165,0,.3);color:var(--gold)}
+
+.spin{width:15px;height:15px;border:2px solid var(--border2);border-top-color:var(--gold);border-radius:50%;animation:spin .7s linear infinite;display:inline-block;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.sec-title{font-size:.68rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);font-family:'Fira Code',monospace;margin-bottom:10px;}
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-name">⚡ MyAssistant</div>
+      <div class="brand-ver">v3.0 · AI AGENT</div>
+      <div class="status-row">
+        <div class="dot" id="sDot"></div>
+        <span class="stxt" id="sTxt">connecting...</span>
+      </div>
+    </div>
+
+    <!-- Live tool activity -->
+    <div class="tools-section">
+      <div class="tools-title">Agent Tools</div>
+      <div class="tool-chip" id="t-web_search"><span class="ti">🔍</span> Web Search</div>
+      <div class="tool-chip" id="t-write_file"><span class="ti">💾</span> Write File</div>
+      <div class="tool-chip" id="t-read_file"><span class="ti">📖</span> Read File</div>
+      <div class="tool-chip" id="t-calculator"><span class="ti">🧮</span> Calculator</div>
+      <div class="tool-chip" id="t-list_files"><span class="ti">📂</span> List Files</div>
+      <div class="tool-chip" id="t-append_file"><span class="ti">✏️</span> Append File</div>
+      <div class="tool-chip" id="t-delete_file"><span class="ti">🗑️</span> Delete File</div>
+    </div>
+
+    <nav>
+      <button class="nav-item active" onclick="gotoPanel('chat')" id="n-chat"><span>💬</span> Chat</button>
+      <button class="nav-item" onclick="gotoPanel('pdf')" id="n-pdf"><span>📄</span> PDF Reader</button>
+      <button class="nav-item" onclick="gotoPanel('files')" id="n-files"><span>🗂️</span> Files</button>
+    </nav>
+
+    <div class="sidebar-foot">
+      MODEL: llama-3.3-70b<br>
+      AGENT LOOP: ON<br>
+      DATA: LOCAL ONLY
+      <div class="shield">🛡️ Payment Blocked</div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-l">
+        <h2 id="panelTitle">💬 Agent Chat</h2>
+        <span class="model-chip">llama-3.3-70b</span>
+        <span class="agent-badge">🤖 AGENT MODE</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="clearChat()">🗑️ Clear</button>
+    </div>
+
+    <!-- CHAT -->
+    <div class="panel active" id="p-chat">
+      <div class="msgs" id="msgs">
+        <div class="welcome" id="welcome">
+          <div class="w-icon">🤖</div>
+          <h2>AI Agent — Ek Command, Sab Kaam</h2>
+          <p>Main khud sochta hoon, tools use karta hoon, aur kaam karta hoon.<br>Tum bas command do — baaki main sambhalunga!</p>
+          <div class="examples">
+            <div class="ex-chip" onclick="quickAsk('Open pit mining ke baare mein web search karo aur mining_notes.txt mein save karo')">
+              <strong>🔍 Search + Save</strong>
+              "Open pit mining ke baare mein web search karo aur mining_notes.txt mein save karo"
+            </div>
+            <div class="ex-chip" onclick="quickAsk('Blast radius calculate karo: radius = 0.069 * (charge_weight)^0.33, charge_weight = 500 kg')">
+              <strong>🧮 Calculate</strong>
+              "Blast radius calculate karo: 500kg charge ke liye formula use karo"
+            </div>
+            <div class="ex-chip" onclick="quickAsk('Rock mechanics kya hota hai? Search karo aur ek study guide banao study_guide.md mein')">
+              <strong>📚 Research + Write</strong>
+              "Rock mechanics search karo aur study_guide.md mein save karo"
+            </div>
+            <div class="ex-chip" onclick="quickAsk('Meri workspace mein kaunsi files hain? List karo aur batao')">
+              <strong>📂 File Manager</strong>
+              "Meri workspace mein kaunsi files hain?"
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="input-wrap">
+        <div class="input-row">
+          <textarea class="chat-ta" id="ta" placeholder="Ek command do — agent khud sab kuch karega... (Enter = send)"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}"
+            oninput="this.style.height='48px';this.style.height=Math.min(this.scrollHeight,140)+'px'"></textarea>
+          <button class="send-btn" id="sendBtn" onclick="send()">↑</button>
+        </div>
+        <div class="input-hint">Enter = send &nbsp;·&nbsp; Shift+Enter = newline &nbsp;·&nbsp; Agent tools: search, files, calculator</div>
+      </div>
+    </div>
+
+    <!-- PDF -->
+    <div class="panel" id="p-pdf">
+      <div class="pdf-wrap">
+        <div class="drop-zone" id="dz"
+          ondragover="event.preventDefault();this.classList.add('drag')"
+          ondragleave="this.classList.remove('drag')"
+          ondrop="onDrop(event)">
+          <input type="file" accept=".pdf" onchange="uploadPDF(this.files[0])">
+          <div class="dz-ico">📑</div>
+          <div style="font-size:.95rem;font-weight:700;margin-bottom:6px">PDF Drop Karo ya Click Karo</div>
+          <div style="font-size:.78rem;color:var(--text2)">Agent PDF padh ke automatically summarize/analyze kar sakta hai</div>
+        </div>
+        <div class="pdf-card" id="pdfCard">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+            <span style="font-size:1.5rem">📄</span>
+            <div>
+              <div style="font-weight:700;font-size:.9rem" id="pdfName"></div>
+              <div style="font-size:.72rem;color:var(--text3);margin-top:2px" id="pdfSub"></div>
+            </div>
+            <span class="badge pdf">PDF</span>
+            <span class="badge pages" id="pdfPages"></span>
+          </div>
+          <div class="pdf-preview" id="pdfPreview"></div>
+          <div class="btn-grp" style="margin-top:14px">
+            <button class="btn btn-gold" onclick="askAboutPDF()">🤖 Agent se analyze karwao</button>
+            <button class="btn btn-ghost" onclick="clearPDF()">✕</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FILES -->
+    <div class="panel" id="p-files">
+      <div class="files-wrap">
+        <div class="sec-title">Workspace Files</div>
+        <div id="fList"><div style="color:var(--text3);font-size:.82rem;text-align:center;padding:20px">Loading...</div></div>
+        <div style="margin-top:8px">
+          <div class="sec-title">File Content</div>
+          <textarea class="field" id="fContent" style="height:180px;resize:vertical;font-family:'Fira Code',monospace;font-size:.78rem" placeholder="File select karo read karne ke liye..."></textarea>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let chatHistory = [];
+let isStreaming  = false;
+let pdfText      = null;
+let pdfFileName  = null;
+let activeTools  = new Set();
+
+// marked setup
+const renderer = new marked.Renderer();
+renderer.code = (code, lang) => {
+  const hl = lang && hljs.getLanguage(lang) ? hljs.highlight(code,{language:lang}).value : hljs.highlightAuto(code).value;
+  const id = 'c'+Math.random().toString(36).slice(2,7);
+  return `<div class="code-wrap"><div class="code-hdr"><span>${lang||'code'}</span><button class="copy-btn" onclick="copyCode('${id}')">📋 Copy</button></div><pre><code id="${id}" class="hljs">${hl}</code></pre></div>`;
+};
+marked.use({renderer, breaks:true, gfm:true});
+
+function renderMD(t){try{return marked.parse(t)}catch(e){return t.replace(/\n/g,'<br>')}}
+function copyCode(id){navigator.clipboard.writeText(document.getElementById(id)?.innerText||'').then(()=>toast('Copied!','ok'))}
+
+// Status
+async function checkStatus(){
+  try{
+    const d = await (await fetch('/status')).json();
+    const dot=document.getElementById('sDot'), txt=document.getElementById('sTxt');
+    if(d.ok){dot.className='dot on';txt.textContent='online';}
+    else{dot.className='dot err';txt.textContent='no api key';}
+  }catch(e){document.getElementById('sDot').className='dot err';document.getElementById('sTxt').textContent='offline';}
+}
+
+// Panel
+function gotoPanel(name){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
+  document.getElementById('p-'+name).classList.add('active');
+  document.getElementById('n-'+name).classList.add('active');
+  const map={chat:'💬 Agent Chat',pdf:'📄 PDF Reader',files:'🗂️ Files'};
+  document.getElementById('panelTitle').textContent=map[name];
+  if(name==='files')loadFiles();
+}
+
+// Highlight active tool in sidebar
+function highlightTool(toolName){
+  document.querySelectorAll('.tool-chip').forEach(c=>c.classList.remove('active'));
+  const el = document.getElementById('t-'+toolName);
+  if(el) el.classList.add('active');
+  setTimeout(()=>el&&el.classList.remove('active'), 2000);
+}
+
+// Add message
+function addMsg(role, html, raw=''){
+  document.getElementById('welcome')?.remove();
+  const msgs=document.getElementById('msgs');
+  const d=document.createElement('div');
+  d.className=`msg ${role}`;
+  d.dataset.raw=raw;
+  const av=role==='user'?'U':'🤖';
+  d.innerHTML=`<div class="avatar">${av}</div><div class="msg-body"><div class="bubble" id="b${Date.now()}">${html}</div></div>`;
+  msgs.appendChild(d);
+  msgs.scrollTop=msgs.scrollHeight;
+  return d;
+}
+
+// Add tool step inside AI bubble
+function addToolStep(text, bubbleEl){
+  const s=document.createElement('div');
+  s.className='tool-step';
+  s.innerHTML=`<span class="ts-icon">${text.split(' ')[0]}</span><span>${text}</span>`;
+  bubbleEl.insertBefore(s, bubbleEl.lastChild||null);
+  document.getElementById('msgs').scrollTop=99999;
+}
+
+function quickAsk(q){document.getElementById('ta').value=q;send();}
+
+async function send(){
+  if(isStreaming) return;
+  const ta=document.getElementById('ta');
+  const msg=ta.value.trim();
+  if(!msg) return;
+  ta.value=''; ta.style.height='48px';
+  document.getElementById('sendBtn').disabled=true;
+  isStreaming=true;
+
+  addMsg('user',renderMD(msg),msg);
+  chatHistory.push({role:'user',content:msg});
+
+  // Create AI bubble
+  document.getElementById('welcome')?.remove();
+  const msgs=document.getElementById('msgs');
+  const aiDiv=document.createElement('div');
+  aiDiv.className='msg ai';
+  const bubbleId='bubble_'+Date.now();
+  aiDiv.innerHTML=`<div class="avatar">🤖</div><div class="msg-body"><div class="bubble" id="${bubbleId}"><div class="typing-dots"><span></span><span></span><span></span></div></div></div>`;
+  msgs.appendChild(aiDiv);
+  msgs.scrollTop=msgs.scrollHeight;
+
+  const bubble=document.getElementById(bubbleId);
+  let fullText='';
+  let bubbleCleared=false;
+
+  try{
+    const resp=await fetch('/agent',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:msg,history:chatHistory.slice(-10),password:''})
+    });
+
+    if(!resp.ok){
+      const err=await resp.json();
+      bubble.innerHTML=`<span style="color:var(--red)">❌ ${err.detail}</span>`;
+      isStreaming=false; document.getElementById('sendBtn').disabled=false; return;
+    }
+
+    const reader=resp.body.getReader();
+    const dec=new TextDecoder();
+    let buffer = '';
+
+    while(true){
+      const {done,value}=await reader.read();
+      if(done) break;
+      
+      buffer += dec.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // Keep partial line in buffer
+
+      for(const line of lines){
+        if(!line.trim() || !line.startsWith('data: ')) continue;
+        const data=line.slice(6);
+        if(data==='[DONE]') break;
+        try{
+          const j=JSON.parse(data);
+
+          if(j.type==='tool'){
+            // Show tool step
+            if(!bubbleCleared){bubble.innerHTML='';bubbleCleared=true;}
+            addToolStep(j.text, bubble);
+            // Highlight sidebar tool
+            const toolMap={'🔍':'web_search','💾':'write_file','📖':'read_file','🧮':'calculator','📂':'list_files','✏️':'append_file','🗑️':'delete_file'};
+            const icon=j.text.split(' ')[0];
+            if(toolMap[icon]) highlightTool(toolMap[icon]);
+          }
+
+          if(j.type==='token'){
+            if(!bubbleCleared){bubble.innerHTML='';bubbleCleared=true;}
+            fullText+=j.text;
+            // Find or create text node
+            let textEl=bubble.querySelector('.ai-text');
+            if(!textEl){
+              textEl=document.createElement('div');
+              textEl.className='ai-text';
+              bubble.appendChild(textEl);
+            }
+            textEl.innerHTML=renderMD(fullText);
+            msgs.scrollTop=msgs.scrollHeight;
+          }
+
+          if(j.type==='error'){
+            bubble.innerHTML=`<span style="color:var(--red)">❌ ${j.text}</span>`;
+          }
+        }catch(e){}
+      }
+    }
+  }catch(e){
+    bubble.innerHTML=`<span style="color:var(--red)">❌ Connection error: ${e.message}</span>`;
+  }
+
+  aiDiv.dataset.raw=fullText;
+  chatHistory.push({role:'assistant',content:fullText});
+  isStreaming=false;
+  document.getElementById('sendBtn').disabled=false;
+  document.getElementById('ta').focus();
+}
+
+function clearChat(){
+  chatHistory=[];
+  const msgs=document.getElementById('msgs');
+  msgs.innerHTML=`<div class="welcome" id="welcome">
+    <div class="w-icon">🤖</div>
+    <h2>AI Agent — Ek Command, Sab Kaam</h2>
+    <p>Main khud sochta hoon, tools use karta hoon, aur kaam karta hoon.<br>Tum bas command do — baaki main sambhalunga!</p>
+    <div class="examples">
+      <div class="ex-chip" onclick="quickAsk('Open pit mining ke baare mein web search karo aur mining_notes.txt mein save karo')"><strong>🔍 Search + Save</strong>"Open pit mining search karo aur file mein save karo"</div>
+      <div class="ex-chip" onclick="quickAsk('Blast radius calculate karo: radius = 0.069 * (500)^0.33')"><strong>🧮 Calculate</strong>"Blast radius calculate karo 500kg charge ke liye"</div>
+      <div class="ex-chip" onclick="quickAsk('Rock mechanics kya hota hai? Search karo aur study_guide.md mein save karo')"><strong>📚 Research</strong>"Rock mechanics search karke study guide banao"</div>
+      <div class="ex-chip" onclick="quickAsk('Meri workspace mein kaunsi files hain?')"><strong>📂 Files</strong>"Meri files list karo"</div>
+    </div>
+  </div>`;
+}
+
+// PDF
+async function uploadPDF(file){
+  if(!file) return;
+  const dz=document.getElementById('dz');
+  dz.innerHTML=`<div style="text-align:center;padding:20px"><div class="spin"></div><br><br>Extracting...</div>`;
+  const form=new FormData(); form.append('file',file);
+  try{
+    const r=await fetch('/upload-pdf',{method:'POST',body:form});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail);
+    document.getElementById('pdfName').textContent=d.filename;
+    document.getElementById('pdfSub').textContent=`${d.extracted_pages||d.total_pages} pages · ~${d.word_count} words`;
+    document.getElementById('pdfPages').textContent=d.total_pages+' pages';
+    document.getElementById('pdfPreview').textContent=d.preview+'...';
+    document.getElementById('pdfCard').classList.add('on');
+    pdfText=d.text; pdfFileName=d.filename;
+    toast(`✅ PDF ready! Agent isko analyze kar sakta hai.`,'ok');
+  }catch(e){toast('❌ '+e.message,'err');}
+  dz.innerHTML=`<input type="file" accept=".pdf" onchange="uploadPDF(this.files[0])"><div class="dz-ico">📑</div><div style="font-size:.95rem;font-weight:700;margin-bottom:6px">PDF Drop Karo ya Click Karo</div><div style="font-size:.78rem;color:var(--text2)">Agent PDF padh ke automatically analyze kar sakta hai</div>`;
+  dz.ondragover=e=>{e.preventDefault();dz.classList.add('drag')};
+  dz.ondragleave=()=>dz.classList.remove('drag');
+  dz.ondrop=onDrop;
+}
+
+function onDrop(e){e.preventDefault();document.getElementById('dz').classList.remove('drag');const f=e.dataTransfer.files[0];if(f)uploadPDF(f);}
+
+function askAboutPDF(){
+  if(!pdfText) return;
+  const q=`Is PDF ka analysis karo:\n\n${pdfText.slice(0,3000)}\n\nEk detailed summary aur key points do. Phir summary.txt mein save karo.`;
+  gotoPanel('chat');
+  document.getElementById('ta').value=q;
+  send();
+}
+
+function clearPDF(){pdfText=null;pdfFileName=null;document.getElementById('pdfCard').classList.remove('on');}
+
+// Files
+async function loadFiles(){
+  const list=document.getElementById('fList');
+  list.innerHTML='<div style="text-align:center;padding:10px"><div class="spin"></div></div>';
+  try{
+    const d=await (await fetch('/files')).json();
+    if(!d.files.length){list.innerHTML='<div style="color:var(--text3);font-size:.82rem;text-align:center;padding:16px">Koi file nahi — agent se banwao!</div>';return;}
+    list.innerHTML=d.files.map(f=>`<div class="file-row">
+      <span style="font-size:1.1rem">${f.icon}</span>
+      <div style="flex:1;min-width:0"><div class="f-name">${f.name}</div><div class="f-size">${(f.size/1024).toFixed(1)} KB</div></div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="readFile('${f.name}')">👁️</button>
+        <button class="btn btn-red btn-sm" onclick="deleteFile('${f.name}')">🗑️</button>
+      </div></div>`).join('');
+  }catch(e){list.innerHTML='<div style="color:var(--red);font-size:.82rem">Error loading files</div>';}
+}
+
+async function readFile(name){
+  try{const d=await (await fetch('/file/'+name)).json();document.getElementById('fContent').value=d.content;}
+  catch(e){toast('Read failed','err');}
+}
+
+async function deleteFile(name){
+  if(!confirm(`'${name}' delete karna chahte ho?`)) return;
+  try {
+    const r = await fetch('/file/'+name, { method: 'DELETE' });
+    if(r.ok) {
+        toast('Deleted!','ok'); loadFiles();
+    } else {
+        const d = await r.json();
+        throw new Error(d.detail || 'Delete failed');
+    }
+  } catch(e) {
+    toast('❌ ' + e.message, 'err');
+  }
+}
+
+// Toast
+let toastT;
+function toast(msg,type='ok'){const t=document.getElementById('toast');t.textContent=msg;t.className=`toast show ${type}`;clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),3000);}
+
+checkStatus();
+setInterval(checkStatus,30000);
+document.getElementById('ta').focus();
+</script>
+</body>
+</html>
