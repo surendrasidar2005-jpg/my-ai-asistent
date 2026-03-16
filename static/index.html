@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>MyAssistant Agent v3.2</title>
+<title>MyAssistant Agent v3.3</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
@@ -180,7 +180,7 @@ nav{padding:10px 10px;flex:1;}
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-name">⚡ MyAssistant</div>
-      <div class="brand-ver">v3.2 · AI AGENT</div>
+      <div class="brand-ver">v3.3 · AI AGENT</div>
       <div class="status-row">
         <div class="dot" id="sDot"></div>
         <span class="stxt" id="sTxt">connecting...</span>
@@ -315,7 +315,6 @@ let chatHistory = [];
 let isStreaming  = false;
 let pdfText      = null;
 let pdfFileName  = null;
-let activeTools  = new Set();
 
 // marked setup
 const renderer = new marked.Renderer();
@@ -332,6 +331,21 @@ function copyCode(id){
   if(el){
     navigator.clipboard.writeText(el.innerText||'').then(()=>toast('Copied!','ok')).catch(()=>toast('Copy failed','err'));
   }
+}
+
+// FIXED: Get tool name from icon/text
+function getToolFromIcon(text){
+  const icon = text.split(' ')[0];
+  const map = {
+    '🔍': 'web_search',
+    '💾': 'write_file',
+    '📖': 'read_file',
+    '🧮': 'calculator',
+    '📂': 'list_files',
+    '✏️': 'append_file',
+    '🗑️': 'delete_file'
+  };
+  return map[icon] || null;
 }
 
 // Status check with retry
@@ -378,20 +392,6 @@ function highlightTool(toolName){
     el.classList.add('active');
     setTimeout(()=>el.classList.remove('active'), 2000);
   }
-}
-
-// Get tool name from icon
-function getToolFromIcon(icon){
-  const map = {
-    '🔍': 'web_search',
-    '💾': 'write_file',
-    '📖': 'read_file',
-    '🧮': 'calculator',
-    '📂': 'list_files',
-    '✏️': 'append_file',
-    '🗑️': 'delete_file'
-  };
-  return map[icon] || null;
 }
 
 // Add message to chat
@@ -483,7 +483,7 @@ async function send(){
       
       buffer += dec.decode(value, {stream: true});
       const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+      buffer = lines.pop() || '';
       
       for(const line of lines){
         if(!line.startsWith('data: ')) continue;
@@ -500,7 +500,7 @@ async function send(){
               bubbleCleared=true;
             }
             addToolStep(j.text, bubble);
-            const toolName = getToolFromIcon(j.text.split(' ')[0]);
+            const toolName = getToolFromIcon(j.text);
             if(toolName) highlightTool(toolName);
           }
 
@@ -529,7 +529,7 @@ async function send(){
       }
     }
     
-    // Process any remaining buffer
+    // Process remaining buffer
     if(buffer.startsWith('data: ')) {
       const data = buffer.slice(6).trim();
       if(data && data !== '[DONE]') {
@@ -576,8 +576,13 @@ function clearChat(){
 // PDF functions
 async function uploadPDF(file){
   if(!file) return;
+  if(file.type !== 'application/pdf') {
+    toast('❌ Please select a PDF file','err');
+    return;
+  }
+  
   const dz=document.getElementById('dz');
-  const originalContent = dz.innerHTML;
+  const originalHTML = dz.innerHTML;
   dz.innerHTML=`<div style="text-align:center;padding:20px"><div class="spin"></div><br><br>Extracting...</div>`;
   
   const form=new FormData(); 
@@ -598,13 +603,14 @@ async function uploadPDF(file){
     toast(`✅ PDF ready! Agent isko analyze kar sakta hai.`,'ok');
   } catch(e){
     toast('❌ '+e.message,'err');
-    // Reset drop zone on error
-    dz.innerHTML = originalContent;
-    // Re-attach event listeners
+    // Reset drop zone
+    dz.innerHTML = originalHTML;
+    // Re-attach listeners
+    dz.ondragover=e=>{e.preventDefault();dz.classList.add('drag')};
+    dz.ondragleave=()=>dz.classList.remove('drag');
+    dz.ondrop=onDrop;
     const input = dz.querySelector('input');
-    if(input) {
-      input.onchange = function() { uploadPDF(this.files[0]); };
-    }
+    if(input) input.onchange = function() { uploadPDF(this.files[0]); };
   }
 }
 
@@ -634,7 +640,6 @@ function clearPDF(){
   pdfText=null;
   pdfFileName=null;
   document.getElementById('pdfCard').classList.remove('on');
-  // Reset file input
   const input = document.getElementById('pdfInput');
   if(input) input.value = '';
 }
@@ -678,13 +683,10 @@ async function deleteFile(name){
       const err = await resp.json();
       throw new Error(err.detail || 'Delete failed');
     }
-    toast('✅ Deleted successfully!','ok'); 
+    const result = await resp.json();
+    toast('✅ ' + result.message,'ok'); 
     loadFiles();
-    // Clear content if currently viewing
-    const currentContent = document.getElementById('fContent').value;
-    if(currentContent && name) {
-      // Optional: check if we were viewing this file
-    }
+    document.getElementById('fContent').value = '';
   } catch(e) {
     toast('❌ Delete failed: '+e.message,'err');
   }
